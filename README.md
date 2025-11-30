@@ -16,6 +16,9 @@ https://youtu.be/3fzhcxWPNmQ?si=NHlqoIhmli0MQffu
 
 This project has been tested using `Ubuntu 22.04`, `ROS 2 Humble`, and the `Webots` simulation environment. Please ensure that your system meets these requirements.
 
+- For a step-by-step walkthrough (ROS install, Webots, Python virtual environment, debugging tools) read `SETUP.md`. It also explains where to drop nuScenes/Waymo/Argo datasets and pretrained weights once you have them.
+- To provision the Python environment quickly, run `scripts/setup_python_env.sh` (after `chmod +x`) which installs the packages listed in `requirements.txt` into `.venv/` by default.
+
 - First, install the `webots_ros2` packages on your system and verify that the `webots_ros2_tesla` package is functioning correctly.
 
 - Next, load the packages from the `ros2-packages` directory into the `ros2_ws/src` folder. 
@@ -47,6 +50,45 @@ Transfer these packages into your working environment and compile them using `co
 - The `autonomous-ai-model` directory contains a dataset with manual driving data and a training file for the neural network model. You are free to use these files as needed.
 - In the `detection-model` directory, you can find the training codes for the YOLOv8 model, as well as the Roboflow link for the traffic lights dataset prepared for this project.
   Feel free to utilize these resources accordingly.
+- External datasets (nuScenes, Waymo, Argoverse, etc.) and pretrained BEV weights are intentionally **not** committed—leave the placeholders in `SETUP.md`/`config/bevfusion.yaml` empty until you provide the paths locally.
+
+## Autonomous perception add-on (BEV Fusion + Occupancy)
+
+- A new ROS 2 package `autonomous_perception` now wraps state-of-the-art pretrained BEV/occupancy models (start with the bundled mock engine, then drop BEVFusion/Occupancy weights under `ros2-packages/autonomous_perception/config/weights`).
+- It synchronizes the six Tesla cameras and LiDAR topics, performs inference, and publishes:
+  - `/perception/detections_3d` (`vision_msgs/Detection3DArray`)
+  - `/perception/occupancy` (`nav_msgs/OccupancyGrid`, ego-centric bird's-eye grid)
+  - `/perception/diagnostics` (latency + CPU/GPU/RAM stats)
+- The `autonomous_controller` node now subscribes to these topics. Occupancy-positive regions ahead of the ego car are fused with LiDAR for obstacle braking, and the controller logs when perception blocks motion.
+- Intermediate tensors/metadata can be dumped by toggling the `debug_dump.enable` parameter or editing `config/bevfusion.yaml`. This honors the user's request for traceable checkpoints during debugging.
+
+### Running the stack (simulation or dataset replay)
+
+```bash
+colcon build --symlink-install
+source install/setup.bash
+
+# Launch Webots + Tesla sensors
+ros2 launch webots_ros2_tesla robot_launch.py use_sim_time:=true
+
+# In another terminal: spin up perception (choose mock/BEV engine via params)
+ros2 launch autonomous_perception autonomous_perception_launch.py params_file:=install/autonomous_perception/share/autonomous_perception/config/bevfusion.yaml use_sim_time:=true
+
+# Finally run the controller (consumes perception topics automatically)
+ros2 run autonomous_controller autonomous_controller --ros-args -p use_perception_topics:=true
+```
+
+### nuScenes / Isaac workflows
+
+- Place your nuScenes dataset path somewhere accessible (e.g., `/data/nuscenes`). The conversion helper `autonomous_perception.scripts.nuscenes_to_mcap` currently writes a placeholder MCAP; point it to the official nuScenes devkit export you prefer and update the script if you need richer topics.
+- After producing an MCAP/rosbag, replay with `ros2 bag play your.mcap --clock` while running the perception + controller launch files above to evaluate accuracy offline.
+- For Isaac Sim, bridge the camera/LiDAR topics (topic names already match what the perception node expects); no further code changes are necessary.
+
+### Evaluation + profiling
+
+- Use `autonomous_perception.scripts.profile_runner --command "ros2 launch ..."` to log CPU/RAM usage into CSV for Jetson/laptop/server comparison. GPU utilization automatically publishes via `/perception/diagnostics` (requires `pynvml`).
+- Accuracy: connect nuScenes ground-truth to the same evaluation scripts shipped with your pretrained model (BEVFusion, Occupancy). Store summary tables/plots under `report/` for presentations.
+- Latency: each inference publishes diagnostics plus you can enable the debug dump to persist timestamps. For quick traces, flip `debug_dump.enable:=true` either via YAML or runtime parameter to capture JSON snapshots per N frames.
 
 ## Not found: NeuralNetwork issue solution
 
@@ -69,3 +111,17 @@ class NeuralNetwork(nn.Module):
         x = self.output(x)
         return x
 ```
+
+## Running the ROS 2 stack
+
+1. Install Docker (with the Compose plugin) plus the NVIDIA Container Toolkit/X11 forwarding if you plan to use GPU visualization.
+2. After cloning, ensure the helper is executable and launch everything:
+   ```bash
+   chmod +x scripts/dev.sh
+   ./scripts/dev.sh
+   ```
+3. To mount custom datasets/models, prefix the script with env vars such as  
+   `HOST_DATASET_PATH=/mnt/datasets HOST_MODEL_PATH=/mnt/models ./scripts/dev.sh`.
+4. Open a shell inside the running container for ROS tools:  
+   `docker compose exec ros2-dev bash`.
+5. When finished, stop the stack via `docker compose down` (add `-v` if volumes should be removed).

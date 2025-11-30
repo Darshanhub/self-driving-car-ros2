@@ -1,6 +1,8 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu , LaserScan, Image
+from nav_msgs.msg import OccupancyGrid
+from vision_msgs.msg import Detection3DArray
 from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PointStamped, PoseStamped
 import math , json , torch , cv2
@@ -118,6 +120,12 @@ def prepare_waypoints(waypoints):
 class OtonomSurus(Node):
     def __init__(self):
         super().__init__('otonom_surus')
+        self.declare_parameter('use_perception_topics', True)
+        self.declare_parameter('perception_occupancy_threshold', 50)
+        self.declare_parameter('perception_block_ratio', 0.05)
+        self.use_perception_topics = self.get_parameter('use_perception_topics').get_parameter_value().bool_value
+        self.perception_threshold = self.get_parameter('perception_occupancy_threshold').get_parameter_value().integer_value
+        self.perception_block_ratio = self.get_parameter('perception_block_ratio').get_parameter_value().double_value
         self.subscription = self.create_subscription(Imu,'/imu',self.imu_callback,10)
         self.publisher_cmd = self.create_publisher(AckermannDrive, '/cmd_ackermann', 10)
         self.subscription = self.create_subscription(PointStamped,'/vehicle/gps',self.gps_callback,10)
@@ -125,6 +133,9 @@ class OtonomSurus(Node):
         self.subscription = self.create_subscription(LaserScan,'/vehicle/lidar_sag',self.lidar_right_callback,10)
         self.subscription = self.create_subscription(LaserScan,'/vehicle/lidar_sol',self.lidar_left_callback,10)
         self.subscription = self.create_subscription(Image,'/vehicle/camera/image_color',self.camera_callback,10)
+        if self.use_perception_topics:
+            self.subscription = self.create_subscription(OccupancyGrid,'/perception/occupancy',self.occupancy_callback,10)
+            self.subscription = self.create_subscription(Detection3DArray,'/perception/detections_3d',self.detections_callback,10)
         self.publisher_cam = self.create_publisher(Image, '/vehicle/camera/detect_cam', 10)
         self.publisher_route = self.create_publisher(Path, '/vehicle/route/waypoints', 10)
         self.publisher_location = self.create_publisher(Path, '/vehicle/location', 10)
@@ -138,10 +149,13 @@ class OtonomSurus(Node):
         self.x = None
         self.y = None
 
-        self.obstacle_front = False
+        self.obstacle_front = 0
+        self.obstacle_front_lidar = False
         self.obstacle_right = False
         self.obstacle_left = False
         self.traffic_light = 0
+        self.perception_blocked = False
+        self.latest_detections = []
         
         self.dx = None
         self.dy = None
@@ -181,6 +195,8 @@ class OtonomSurus(Node):
                 self.get_logger().info('KIRMIZI ISIK')
             elif self.obstacle_front == 1:
                 self.get_logger().info('ON ENGEL')
+            elif self.perception_blocked:
+                self.get_logger().info('PERCEPTION BLOKELENDI')
             else:
                 self.get_logger().info('HIZ: %.2f, DIREKSIYON: %.2f' % (self.speed, math.degrees(self.steering_angle)))
 
@@ -214,7 +230,8 @@ class OtonomSurus(Node):
     def lidar_front_callback(self, msg):
         min_v = min(msg.ranges)
         limit = 6.0
-        self.obstacle_front = obstacle_detect(min_v, limit)
+    self.obstacle_front_lidar = obstacle_detect(min_v, limit)
+    self.obstacle_front = 1 if (self.obstacle_front_lidar or self.perception_blocked) else 0
     
     def lidar_right_callback(self, msg):
         min_v = min(msg.ranges)
@@ -225,6 +242,24 @@ class OtonomSurus(Node):
         min_v = min(msg.ranges)
         limit = 4.3
         self.obstacle_left = obstacle_detect(min_v, limit)
+
+    def occupancy_callback(self, msg: OccupancyGrid):
+        if not msg.data:
+            return
+        grid = np.array(msg.data, dtype=np.int16).reshape(msg.info.height, msg.info.width)
+        row_start = int(msg.info.height * 0.55)
+        row_end = msg.info.height
+        col_center = msg.info.width // 2
+        col_span = 10
+        front_slice = grid[row_start:row_end, max(0, col_center-col_span):min(msg.info.width, col_center+col_span)]
+        occupied = np.sum(front_slice >= self.perception_threshold)
+        total = front_slice.size if front_slice.size > 0 else 1
+        ratio = occupied / total
+        self.perception_blocked = ratio >= self.perception_block_ratio
+        self.obstacle_front = 1 if (self.obstacle_front_lidar or self.perception_blocked) else 0
+
+    def detections_callback(self, msg: Detection3DArray):
+        self.latest_detections = msg.detections
         
     def imu_callback(self, msg):
         self.yaw = euler_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)

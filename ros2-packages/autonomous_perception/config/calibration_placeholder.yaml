@@ -1,0 +1,10 @@
+intrinsics:
+  cam_front:
+    fx: 1000.0
+    fy: 1000.0
+    cx: 960.0
+    cy: 600.0
+extrinsics:
+  cam_front:
+    translation: [0.0, 0.0, 1.6]
+    rotation_quat: [0.0, 0.0, 0.0, 1.0]

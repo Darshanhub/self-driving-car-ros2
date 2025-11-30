@@ -1,0 +1,25 @@
+bev_fusion_node:
+  ros__parameters:
+    camera_topics:
+      - /vehicle/camera/front/image_color
+      - /vehicle/camera/front_left/image_color
+      - /vehicle/camera/front_right/image_color
+      - /vehicle/camera/rear/image_color
+      - /vehicle/camera/rear_left/image_color
+      - /vehicle/camera/rear_right/image_color
+    lidar_topic: /vehicle/lidar_points
+    engine_type: mock
+    model_path: ""
+    device: cuda:0
+    calibration_path: "share/autonomous_perception/config/calibration_placeholder.yaml"
+    sync_slop: 0.08
+    publish_rate_hz: 10.0
+    occupancy_resolution: 0.5
+    occupancy_size: [200, 200]
+    occupancy_frame: map
+    diagnostics_period: 1.0
+    monitor.enable_gpu: true
+    monitor.gpu_id: 0
+    debug_dump.enable: false
+    debug_dump.output_dir: ~/.ros/autonomous_perception/debug
+    debug_dump.flush_every: 4

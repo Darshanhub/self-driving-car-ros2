@@ -1,0 +1,11 @@
+# Python-only dependencies for the ROS 2 perception/controller stack.
+numpy>=1.24,<2.1
+psutil>=5.9
+pynvml>=11.5
+PyYAML>=6.0
+ultralytics>=8.0
+opencv-python>=4.8
+# Torch CPU builds install everywhere; replace with +cu* wheels on CUDA hosts.
+torch>=2.1
+torchvision>=0.16
+torchaudio>=2.1
